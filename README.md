@@ -1,4 +1,4 @@
-# Lab work <mark>2</mark>: <mark>Myshell interpreter</mark>
+# Lab work Myshell interpreter</mark>
 
 ## Before 
 
@@ -8,6 +8,8 @@
 ### Installing and usage
 
 ```
+git clone https://github.com/etamin-code/my_shell
+cd my_shell
 bash ./compile.sh
 
 cd bin
