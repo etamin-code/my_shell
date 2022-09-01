@@ -8,74 +8,62 @@
 #include <filesystem>
 #include <fstream>
 #include <unistd.h>
+#include <regex>
+#include <bits/stdc++.h>
+#include<stdlib.h>
+#include<stdio.h>
+#include<fcntl.h>
 #include <wait.h>
 #include "options_parser.h"
 #include "parse_args.h"
 #include "builtins.h"
-#include <regex>
-#include <bits/stdc++.h>
 
-
+std::map<std::string, int> FD{{"in",0}, {"out",1}, {"err",2}};
 
 
 int execute_command(std::vector<std::string> &parsed) {
     std::string program_name = parsed[0];
     parsed.erase(parsed.begin());
-
+    int background_mode = 0;
+    if (parsed[parsed.size() - 1] == "&") {
+        background_mode = 1;
+        parsed.pop_back();
+    }
     auto it = builtin_programs.find(program_name);
+
     if (it != builtin_programs.end()) {
+        check_out_redirect(parsed);
         builtin_programs[program_name](parsed);
+        if (FD["out"]!=1) {
+            close(FD["out"]);
+            FD["out"] = 1;
+        }
+        if (FD["err"]!=2) {
+            close(FD["err"]);
+            FD["err"] = 2;
+        }
     }
     else if (std::filesystem::exists(program_name) &&
                 (parsed.empty()) &&
                 ends_with(program_name, ".msh")) {
-
-        pid_t pid = fork();
-
-        if (pid == 0) {
-            //child
-            std::vector<std::string> data = {program_name};
-            execute_script(data);
-            exit(0);
-        } else if (pid > 0){
-            //parent
-            int status;
-            waitpid(pid, &status, 0);
-        } else  {
-            std::cerr << "Failed to fork()" << std::endl;
-            error_value = EXIT_FAILURE;
+        std::string cmd = "myshell " + program_name;
+        if (check_and_execute(cmd))
             return EXIT_FAILURE;
-        }
-
-    } else if ((program_name == "myshell") &&
-                std::filesystem::exists(parsed[0]) &&
-                (parsed.size() == 1) &&
-                ends_with(parsed[0], ".msh")) {
-        pid_t pid = fork();
-
-        if (pid == 0) {
-            //child
-            char *argv[2];
-            argv[0] = parsed[0].data();
-            argv[1] = NULL;
-            execvp(argv[0], argv);
-            return EXIT_FAILURE;
-
-        } else if (pid > 0){
-            //parent
-            int status;
-            waitpid(pid, &status, 0);
-        } else  {
-            std::cerr << "Failed to fork()" << std::endl;
-            error_value = EXIT_FAILURE;
-            return EXIT_FAILURE;
-        }
-    } else {
+    }
+    else {
         bool failed = false;
         pid_t pid = fork();
 
         if (pid == 0) {
             //child
+            check_out_redirect(parsed);
+            if (FD["out"]!=1) {
+                dup2(FD["out"], 1);
+            }
+            if (FD["err"]!=2) {
+                dup2(FD["err"], 2);
+            }
+
             char *argv[parsed.size() + 2];
             argv[0] = program_name.data();
             for (size_t i = 1; i < parsed.size() + 1; i++) {
@@ -85,6 +73,15 @@ int execute_command(std::vector<std::string> &parsed) {
             if (execvp(argv[0], argv)) {
                 failed = true;
             }
+            if (FD["out"]!=1) {
+                close(FD["out"]);
+                FD["out"] = 1;
+            }
+            if (FD["err"]!=2) {
+                close(FD["err"]);
+                FD["err"] = 2;
+            }
+
         } else if (pid > 0){
             //parent
             int status;
@@ -104,6 +101,185 @@ int execute_command(std::vector<std::string> &parsed) {
     return 0;
 }
 
+int check_pipe(std::string &input, std::vector<std::string> &commands) {
+    std::string delimiter = "|";
+    size_t pos = 0;
+    std::string token;
+    while ((pos = input.find(delimiter)) != std::string::npos) {
+        token = input.substr(0, pos);
+        commands.push_back(token);
+        input.erase(0, pos + delimiter.length());
+    }
+    commands.push_back(input);
+    if (commands.size() >= 2) {
+        for (int i=0; i<commands.size(); i++) {
+            if (i != 0)
+                commands[i] = commands[i] + " < in.txt";
+            if (i != commands.size() - 1)
+                commands[i] = commands[i] + " > out.txt";
+        }
+    }
+    return 0;
+}
+
+int check_inside_commands(std::string &input) {
+    size_t pos1, pos2;
+    while ((pos1 = input.find("$(")) != std::string::npos) {
+        std::ifstream read_file;
+        pos2 = input.find(")");
+        std::string cmd = input.substr(pos1+2, pos2 - pos1 - 2  );
+        cmd = cmd + " > out2.txt";
+        check_and_execute(cmd);
+        read_file.open("out2.txt");
+        std::string line, file_data="";
+        if (read_file.is_open()) {
+            std::getline(read_file, line);
+            file_data = file_data + line;
+        }
+        input = input.substr(0, pos1) + file_data + input.substr(pos2 + 1, input.size() - pos2 - 1);
+    }
+    remove("out2.txt");
+    return 0;
+}
+
+int check_in_redirect(std::string &input) {
+//   if it finds sign '<' read file content and add it to input
+    std::vector <std::string> parsed;
+    if (parse_args(input, parsed)) {
+        std::cout << "errorr" << std::endl;
+        std::string cur_string = "Invalid arguments";
+        error_value = write_to_fd(FD["err"], cur_string);
+        if (error_value != 0) {
+            return error_value;
+        }
+        error_value = EXIT_FAILURE;
+        return error_value;
+    }
+    std::ifstream read_file;
+    for (int i = 0; i < parsed.size(); i++) {
+        if (parsed[i].find_last_of('<', parsed[i].size()) != std::string::npos) {
+            if (i == parsed.size() - 1) {
+                std::string cur_string = "incorrect syntax, the only appearence of < cant be in the last argument";
+                error_value = write_to_fd(FD["err"], cur_string);
+                if (error_value != 0) {
+                    return error_value;
+                }
+            }
+            if (std::filesystem::exists(parsed[i + 1])) {
+                read_file.open(parsed[i + 1].c_str());
+            } else {
+                std::string cur_string = "file for redirection doesn`t exist\n";
+                error_value = write_to_fd(FD["err"], cur_string);
+                if (error_value != 0) {
+                    return error_value;
+                }
+                error_value = EXIT_FAILURE;
+                return error_value;
+            }
+
+            std::string line, file_data="";
+            if (read_file.is_open()) {
+                std::getline(read_file, line);
+                file_data = file_data + line;
+            }
+            else {
+                std::string cur_string = "error in opening file";
+                error_value = write_to_fd(FD["err"], cur_string);
+                if (error_value != 0) {
+                    return error_value;
+                }
+                error_value = EXIT_FAILURE;
+                return error_value;
+            }
+
+        //  delete elements which relate to redirection
+            parsed.erase(parsed.begin() + i);
+            parsed.erase(parsed.begin() + i);
+            std::vector <std::string> parsed_from_file;
+            if (parse_args(file_data, parsed_from_file)) {
+                std::string cur_string = "Invalid arguments in file";
+                error_value = write_to_fd(FD["err"], cur_string);
+                if (error_value != 0) {
+                    return error_value;
+                }
+                error_value = EXIT_FAILURE;
+                return error_value;
+            }
+            parsed.insert(parsed.begin() + i,parsed_from_file.begin(),parsed_from_file.end());
+            input = boost::algorithm::join(parsed, " ");
+
+        }
+    }
+    error_value = EXIT_SUCCESS;
+    return error_value;
+
+}
+
+
+int check_out_redirect(std::vector<std::string> &parsed) {
+    int fd;
+    for (int i=0; i<parsed.size(); i++){
+        if (parsed[i].find_last_of('>', parsed[i].size()) != std::string::npos) {
+            if (i == parsed.size() - 1) {
+                std::string cur_string = "incorrect syntax, the only appearence of > cant be in the last argument";
+                error_value = write_to_fd(FD["err"], cur_string);
+                if (error_value != 0) {
+                    return error_value;
+                }
+                error_value = EXIT_FAILURE;
+                return error_value;
+            }
+            fd = open(parsed[i+1].c_str(), O_WRONLY | O_APPEND | O_CREAT, 0600);
+            if (fd == -1) {
+                std::string cur_string = "error in opening redirection file\n";
+                error_value = write_to_fd(FD["err"], cur_string);
+                if (error_value != 0) {
+                    return error_value;
+                }
+                error_value = EXIT_FAILURE;
+                return error_value;
+            }
+            if (parsed[i].find_last_of('2', parsed[i].size()) != std::string::npos) {
+                FD["err"] = fd;
+            }else if (parsed[i].find_last_of('&', parsed[i].size()) != std::string::npos) {
+                FD["err"] = fd;
+                FD["out"] = fd;
+            } else if ((parsed[i].find_last_of('1', parsed[i].size()) != std::string::npos)) {
+                FD["out"] = fd;
+            }
+            else if (parsed[i].size() == 1) {
+                if (i + 2 < parsed.size()) {
+                    if (parsed[i + 2] == "2>&1" || parsed[i + 2] == "1>&2") {
+                        FD["err"] = fd;
+                        FD["out"] = fd;
+                    }
+                }
+                else {
+                    FD["out"] = fd;
+                }
+
+            }
+            else {
+                std::string cur_string = "incorrect syntax " + parsed[i] + " is not acceptable argument";
+                error_value = write_to_fd(FD["err"], cur_string);
+                if (error_value != 0) {
+                    return error_value;
+                }
+                error_value = EXIT_FAILURE;
+                return error_value;
+            }
+//            delete elements which relate to redirection
+            parsed.erase(parsed.begin() + i);
+            parsed.erase(parsed.begin() + i);
+            if (parsed[i].find_last_of('>', parsed[i].size()) != std::string::npos) {
+                parsed.erase(parsed.begin() + i);
+            }
+            break;
+        }
+    }
+    error_value = EXIT_SUCCESS;
+    return error_value;
+}
 
 bool compare_wildcard(std::string str, std::string pattern)
 {
@@ -139,9 +315,13 @@ bool compare_wildcard(std::string str, std::string pattern)
                     j += 4;
 
                     if (pattern[j - 1] != ']') {
-                        std::cerr << "wildcard pattern is incorrect" << std::endl;
+                        std::string cur_string = "wildcard pattern is incorrect";
+                        error_value = write_to_fd(FD["err"], cur_string);
+                        if (error_value != 0) {
+                            return error_value;
+                        }
                         error_value = EXIT_FAILURE;
-                        return EXIT_FAILURE;
+                        return error_value;
                     }
                 }
                 else {
@@ -172,7 +352,7 @@ bool compare_wildcard(std::string str, std::string pattern)
     return lookup[n][m];
 }
 
-std::vector<std::string> get_wildcard_files(const std::string& search_path) {
+int get_wildcard_files(const std::string& search_path, std::vector<std::string> &match_files) {
     std::string working_dir = "./", cur_file;
     size_t found = search_path.find_last_of('/', search_path.size());
     std::string pattern = search_path;
@@ -180,7 +360,6 @@ std::vector<std::string> get_wildcard_files(const std::string& search_path) {
         working_dir = search_path.substr(0, found);
         pattern = search_path.substr(found + 1, search_path.size() - found);
     }
-    std::vector<std::string> match_files;
     const std::filesystem::directory_iterator end;
     std::error_code ec;
 
@@ -188,115 +367,144 @@ std::vector<std::string> get_wildcard_files(const std::string& search_path) {
         cur_file = iter->path().string();
 
         try {
-            if (std::filesystem::is_regular_file(cur_file, ec)) {
+//            if (std::filesystem::is_regular_file(cur_file, ec)) {
                 found = cur_file.find_last_of('/', cur_file.size());
                 if (compare_wildcard(cur_file.substr(found + 1, cur_file.size() - found), pattern)) {
                     match_files.push_back(cur_file);
                 }
-            }
+//            }
             if (ec) {
-                std::cerr << "error in file checking" << std::endl;
+                std::string cur_string = "error in file checking";
+                error_value = write_to_fd(FD["err"], cur_string);
+                if (error_value != 0) {
+                    return error_value;
+                }
                 error_value = EXIT_FAILURE;
-                return match_files;
+                return error_value;
             }
         }
         catch (std::exception&) {}
     }
-    return match_files;
+    error_value = EXIT_SUCCESS;
+    return error_value;
     }
 
 
-int check_and_execute(const std::string &input) {
+int check_and_execute(std::string &input) {
     int result = 0, i = 0;
     history.push_back(input);
-    std::vector<std::string> parsed, match_files;
-    int wildcard=0;
-    std::string special_ch="[]*?";
+    std::vector<std::string> commands;
+    check_pipe(input, commands);
 
-    if (parse_args(input, parsed)) {
-        std::cerr << "Invalid arguments" << std::endl;
-        error_value = -1;
-        return 0;
-    }
-    if ( parsed.empty() ) {
-        return result;
-    } else {
-        for (i=0; i<parsed.size(); i++) {
-            for (int j = 0; j < special_ch.size(); j++)
-                if ((parsed[i].find(special_ch[j]) != std::string::npos)) {
-                    if (parsed[i].find('=') == std::string::npos) {
-                        wildcard = 1;
-                        break;
-                    }
-                }
-            if (wildcard)
-                break;
+    for (std::string cmd: commands) {
+        check_in_redirect(cmd);
+        check_inside_commands(cmd);
+        std::vector <std::string> parsed;
+        int wildcard = 0;
+        std::string special_ch = "[]*?";
+
+        if (parse_args(cmd, parsed)) {
+            std::string cur_string = "Invalid arguments";
+            error_value = write_to_fd(FD["err"], cur_string);
+            if (error_value != 0) {
+                return error_value;
+            }
+            error_value = EXIT_FAILURE;
+            return error_value;
         }
-        if (wildcard){
-            match_files = get_wildcard_files(parsed[i]);
-            parsed.erase(parsed.begin() + i);
-            parsed.insert(parsed.begin() + i,match_files.begin(),match_files.end());
-            result = execute_command(parsed);
-
-            std::cout << std::endl;
+        if (parsed.empty()) {
             return result;
+        } else {
+            for (i = 0; i < parsed.size(); i++) {
+                for (int j = 0; j < special_ch.size(); j++)
+                    if ((parsed[i].find(special_ch[j]) != std::string::npos)) {
+                        if (parsed[i].find('=') == std::string::npos) {
+                            wildcard = 1;
+                            break;
+                        }
+                    }
+                if (wildcard)
+                    break;
+            }
+            if (wildcard) {
+                std::vector <std::string> match_files;
+                get_wildcard_files(parsed[i], match_files);
+                parsed.erase(parsed.begin() + i);
+                parsed.insert(parsed.begin() + i, match_files.begin(), match_files.end());
+                result = execute_command(parsed);
+                return result;
+            }
+            result = execute_command(parsed);
+            std::cout << std::endl;
         }
-        result = execute_command(parsed);
-        std::cout << std::endl;
+        rename("out.txt", "in.txt");
+        if (result)
+            return result;
     }
+    remove("in.txt");
     return result;
 }
 
+
 //------------------------------------------------------------------------------------------------
 
+int write_to_fd(int fd, std::string &cur_string) {
+    char cur_char_array[cur_string.size() + 1];
+    strcpy(cur_char_array, cur_string.c_str());
+    if (write(fd, &cur_char_array, cur_string.size()) == -1)
+        error_value = EXIT_FAILURE;
+    else
+        error_value = EXIT_SUCCESS;
+    return error_value;
+}
 
 int merrno(std::vector<std::string> &args) {
     for (const auto & arg : args) {
         if ((arg == "-h") || (arg == "--help")) {
-            std::cout << "merrno [-h|--help]" << std::endl;
-            error_value = 0;
-            return 0;
+            std::string cur_string = "merrno [-h|--help]";
+            error_value = write_to_fd(FD["out"], cur_string);
+            return error_value;
         }
     }
     if (!args.empty()) {
         error_value = -1;
         return error_value;
     }
-    std::cout << error_value << std::endl;
-    error_value = 0;
-    return 0;
+    std::string cur_string = std::to_string(error_value);
+    error_value = write_to_fd(FD["out"], cur_string);
+    return error_value;
 }
 
 
 int mpwd(std::vector<std::string> &args) {
     for (const auto & arg : args) {
         if ((arg == "-h") || (arg == "--help")) {
-            std::cout << "mpwd [-h|--help]" << std::endl;
-            error_value = 0;
-            return 0;
+            std::string cur_string = "mpwd [-h|--help]";
+            error_value = write_to_fd(FD["out"], cur_string);
+            return error_value;
         }
     }
     if (!args.empty()) {
         error_value = -1;
         return error_value;
     }
-    std::cout << std::filesystem::current_path() << std::endl;
-    error_value = 0;
-    return 0;
+    std::string cur_string = std::filesystem::current_path();
+    error_value = write_to_fd(FD["out"], cur_string);
+    return error_value;
 }
 
 
 int mcd(std::vector<std::string> &args) {
     for (const auto & arg : args) {
         if ((arg == "-h") || (arg == "--help")) {
-            std::cout << "mcd <path> [-h|--help] " << std::endl;
-            error_value = 0;
-            return 0;
+            std::string cur_string = "mcd <path> [-h|--help] ";
+            error_value = write_to_fd(FD["out"], cur_string);
+            return error_value;
         }
     }
     if (args.size() != 1) {
-        std::cerr << "Invalid number of arguments" << std::endl;
-        error_value = -1;
+        std::string cur_string = "Invalid number of arguments";
+        error_value = write_to_fd(FD["err"], cur_string);
         return error_value;
     }
 
@@ -307,7 +515,11 @@ int mcd(std::vector<std::string> &args) {
     new_path = cur_path + "/" + args[0];
     success = chdir(new_path.c_str());
     if (success != 0) {
-        std::cerr << "Unknown path" << std::endl;
+        std::string cur_string = "Unknown path";
+        error_value = write_to_fd(FD["err"], cur_string);
+        if (error_value != 0) {
+            return error_value;
+        }
         error_value = -1;
         return error_value;
     }
@@ -319,9 +531,9 @@ int mcd(std::vector<std::string> &args) {
 int mexit(std::vector<std::string> &args) {
     for (const auto & arg : args) {
         if ((arg == "-h") || (arg == "--help")) {
-            std::cout << "mexit [completion code] [-h|--help]" << std::endl;
-            error_value = 0;
-            return 0;
+            std::string cur_string = "mexit [completion code] [-h|--help]";
+            error_value = write_to_fd(FD["out"], cur_string);
+            return error_value;
         }
     }
     if (args.empty()) {
@@ -342,16 +554,17 @@ int mexit(std::vector<std::string> &args) {
 
 
 int mecho(std::vector<std::string> &args) {
+//    int fd_out=1, fd_err=1;
     for (const auto & arg : args) {
         if ((arg == "-h") || (arg == "--help")) {
-            std::cout << "mecho [-h|--help] [text|$<var_name>] [text|$<var_name>]  [text|$<var_name>] ..." << std::endl;
-            error_value = 0;
-            return 0;
+            std::string cur_string = "mecho [-h|--help] [text|$<var_name>] [text|$<var_name>]  [text|$<var_name>] ...";
+            error_value = write_to_fd(FD["out"], cur_string);
+            return error_value;
         }
     }
-    std::cout << boost::algorithm::join(args, " ") << std::endl;
-    error_value = 0;
-    return 0;
+    std::string cur_string = boost::algorithm::join(args, " ");
+    error_value = write_to_fd(FD["out"], cur_string);
+    return error_value;
 }
 
 
@@ -367,7 +580,11 @@ int mexport(std::vector<std::string> &args) {
 
 int execute_script(std::vector<std::string> &args) {
     if (!((args.size() == 1) && (ends_with(args[0], ".msh")))) {
-        std::cerr << "Invalid script" << std::endl;
+        std::string cur_string = "Invalid script";
+        error_value = write_to_fd(FD["err"], cur_string);
+        if (error_value != 0) {
+            return error_value;
+        }
         error_value = -1;
         return error_value;
     }

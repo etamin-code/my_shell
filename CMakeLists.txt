@@ -25,9 +25,10 @@ add_subdirectory(external/myrls)
 
 #! Project source compilation
 add_executable(${PROJECT_NAME} src/main.cpp
-		                       src/builtins.cpp
-							   src/parse_args.cpp
-		src/options_parser.cpp)
+		src/builtins.cpp
+		src/parse_args.cpp
+		src/options_parser.cpp include/server.h src/server.cpp)
+
 
 #install(EXPORT mycat DESTINATION ${PROJECT_SOURCE_DIR}/bin)
 
@@ -39,5 +40,5 @@ target_link_libraries(${PROJECT_NAME} Boost::program_options)
 
 #! set output directory (bin)
 set_target_properties(${PROJECT_NAME}
-						PROPERTIES
-						RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
+		PROPERTIES
+		RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)

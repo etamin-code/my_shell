@@ -1,0 +1,3 @@
+# this is script
+mexport a=dir/[a-z][12]
+cat $a

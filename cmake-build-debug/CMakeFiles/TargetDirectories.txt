@@ -1,0 +1,9 @@
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/CMakeFiles/myshell.dir
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/external/mycat/CMakeFiles/mycat.dir
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/external/mycat/CMakeFiles/edit_cache.dir
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/external/mycat/CMakeFiles/rebuild_cache.dir
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/external/myrls/CMakeFiles/myrls.dir
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/external/myrls/CMakeFiles/edit_cache.dir
+/home/oleksandr/Documents/my_shell/my_shell_final/cmake-build-debug/external/myrls/CMakeFiles/rebuild_cache.dir

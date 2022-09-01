@@ -6,9 +6,13 @@
 #include <map>
 
 int execute_command(std::vector<std::string> &parsed);
-int check_and_execute(const std::string &input);
+int check_and_execute(std::string &input);
 bool compare_wildcard(std::string str, std::string pattern);
-std::vector<std::string> get_wildcard_files(const std::string& search_path);
+int get_wildcard_files(const std::string& search_path, std::vector<std::string> &match_files);
+int check_out_redirect(std::vector<std::string> &parsed);
+int write_to_fd(int fd, std::string &cur_string);
+int check_pipe(std::string &input, std::vector<std::string> &commands);
+int check_inside_commands(std::string &input);
 
 int merrno(std::vector<std::string> &args);
 int mpwd(std::vector<std::string> &args);
